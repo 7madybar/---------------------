@@ -1,7 +1,7 @@
 import { env } from 'cloudflare:workers';
 import { cookies } from 'next/headers';
 import { ApiError, database, digest, now } from './server';
-export const SESSION_COOKIE = '__Host-vg_team';
+import { SESSION_COOKIE,EMBED_SESSION_COOKIE,SESSION_SECONDS,sessionCookie } from './session-cookie';
 const alphabet = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789';
 export function newAccessCode() {
   const random = crypto.getRandomValues(new Uint8Array(20));
@@ -20,12 +20,12 @@ async function bootstrapAdmin() {
   if (!/^[a-f0-9]{64}$/.test(env.INITIAL_ADMIN_CODE_HASH) || !env.INITIAL_ADMIN_EMAIL) throw new ApiError(503,'إعداد رمز المدير غير مكتمل.');
   const db = database(), email = env.INITIAL_ADMIN_EMAIL.toLowerCase().trim();
   await db.batch([
-    db.prepare("INSERT OR IGNORE INTO members (email,user_id,name,role,active,created_at) SELECT ?,?,'مدير الفريق','admin',1,? WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='code_admin_bootstrapped')").bind(email,crypto.randomUUID(),now()),
+    db.prepare("INSERT OR IGNORE INTO members (email,user_id,name,role,active,created_at) SELECT ?,?,'مالك الموقع','owner',1,? WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='code_admin_bootstrapped')").bind(email,crypto.randomUUID(),now()),
     db.prepare("UPDATE members SET access_code_hash=?, user_id=COALESCE(user_id,?) WHERE email=? AND NOT EXISTS (SELECT 1 FROM settings WHERE key='code_admin_bootstrapped')").bind(env.INITIAL_ADMIN_CODE_HASH,crypto.randomUUID(),email),
     db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('code_admin_bootstrapped','1')"),
   ]);
 }
-export async function signInWithCode(code: string) {
+export async function signInWithCode(code: string, embedded=false) {
   const hash = await codeHash(code);
   await bootstrapAdmin();
   const db=database();
@@ -35,18 +35,22 @@ export async function signInWithCode(code: string) {
   const token=btoa(String.fromCharCode(...bytes)).replaceAll('+','-').replaceAll('/','_').replaceAll('=','');
   await db.batch([
     db.prepare('DELETE FROM team_sessions WHERE expires_at<=?').bind(now()),
-    db.prepare('INSERT INTO team_sessions (hash,member_email,created_at,expires_at) VALUES (?,?,?,?)').bind(await digest(token),row.email,now(),now()+28800),
+    db.prepare('INSERT INTO team_sessions (hash,member_email,created_at,expires_at) VALUES (?,?,?,?)').bind(await digest(token),row.email,now(),now()+SESSION_SECONDS),
   ]);
-  return `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=28800`;
+  return sessionCookie(token,embedded);
 }
-export async function signOutCode() {
-  const token=(await cookies()).get(SESSION_COOKIE)?.value;
-  if(token)await database().prepare('DELETE FROM team_sessions WHERE hash=?').bind(await digest(token)).run();
-  return `${SESSION_COOKIE}=; Path=/; HttpOnly; Secure; SameSite=Lax; Max-Age=0`;
+export async function signOutCode(embedded=false) {
+  const jar=await cookies();
+  for(const name of [SESSION_COOKIE,EMBED_SESSION_COOKIE]){
+    const token=jar.get(name)?.value;
+    if(token)await database().prepare('DELETE FROM team_sessions WHERE hash=?').bind(await digest(token)).run();
+  }
+  return sessionCookie('',embedded,0);
 }
 export async function issueCode(email:string) {
   const code=newAccessCode(), db=database();
-  const token=(await cookies()).get(SESSION_COOKIE)?.value;
+  const jar=await cookies();
+  const token=jar.get(EMBED_SESSION_COOKIE)?.value || jar.get(SESSION_COOKIE)?.value;
   const currentSession=token?await digest(token):'';
   const results=await db.batch([
     db.prepare('UPDATE members SET access_code_hash=?,user_id=COALESCE(user_id,?) WHERE email=?').bind(await codeHash(code),crypto.randomUUID(),email),

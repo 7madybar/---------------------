@@ -7,10 +7,11 @@ export default defineConfig({
   root: fileURLToPath(new URL('./github-pages', import.meta.url)),
   base: `${basePath}/`, publicDir: false,
   resolve: { alias: { '@': fileURLToPath(new URL('.', import.meta.url)) } },
-  plugins: [react(), { name: 'pages-metadata', transformIndexHtml: html => html.replaceAll('__PAGES_BASE__', basePath) }],
+  plugins: [react(), { name: 'pages-metadata', transformIndexHtml: html => html.replaceAll('__PAGES_BASE__', basePath).replaceAll('__TEAM_ORIGIN__',apiOrigin) }],
   define: {
     'process.env.NEXT_PUBLIC_API_ORIGIN': JSON.stringify(apiOrigin),
     'process.env.NEXT_PUBLIC_BASE_PATH': JSON.stringify(basePath),
   },
-  build: { outDir: '../.pages-build', emptyOutDir: true, assetsDir: 'pages-assets' },
+  build: { outDir: '../.pages-build', emptyOutDir: true, assetsDir: 'pages-assets', rollupOptions:{input:{public:fileURLToPath(new URL('./github-pages/index.html',import.meta.url)),team:fileURLToPath(new URL('./github-pages/team/index.html',import.meta.url))}} },
 });
+

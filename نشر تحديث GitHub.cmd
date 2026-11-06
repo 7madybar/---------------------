@@ -14,6 +14,7 @@ for /f "delims=" %%B in ('git branch --show-current 2^>nul') do set "branch=%%B"
 if not "%branch%"=="main" goto wrongbranch
 if not exist "index.html" goto missingbuild
 if not exist ".nojekyll" goto missingbuild
+if not exist "team\index.html" goto missingbuild
 dir /b "pages-assets\*.js" >nul 2>&1
 if errorlevel 1 goto missingbuild
 dir /b "pages-assets\*.css" >nul 2>&1

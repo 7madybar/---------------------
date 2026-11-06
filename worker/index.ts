@@ -39,6 +39,10 @@ const worker = {
       secured.headers.set('Access-Control-Allow-Origin', env.PUBLIC_FORM_ORIGIN!);
       secured.headers.append('Vary', 'Origin');
     }
+    if(path === '/admin' || path.startsWith('/admin/')) {
+      const frameAncestors = "'self' https://7madybar.github.io" + (import.meta.env.DEV ? ' http://localhost:5484' : '');
+      secured.headers.set('Content-Security-Policy', 'frame-ancestors '+frameAncestors);
+    }
     return secured;
   },
 };

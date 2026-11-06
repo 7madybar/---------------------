@@ -6,5 +6,7 @@ const result = spawnSync(process.execPath, ['node_modules/vite/bin/vite.js', 'bu
 if (result.status !== 0) process.exit(result.status || 1);
 cpSync(new URL('../.pages-build/index.html', import.meta.url), new URL('../index.html', import.meta.url));
 cpSync(new URL('../.pages-build/pages-assets', import.meta.url), new URL('../pages-assets', import.meta.url), { recursive: true });
+cpSync(new URL('../.pages-build/team', import.meta.url), new URL('../team', import.meta.url), { recursive: true });
 writeFileSync(new URL('../.nojekyll', import.meta.url), '');
-console.log('GitHub Pages files ready: index.html, pages-assets/, .nojekyll');
+console.log('GitHub Pages files ready: index.html, team/index.html, pages-assets/, .nojekyll');
+
