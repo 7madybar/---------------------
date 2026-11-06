@@ -1,6 +1,7 @@
 import { env } from 'cloudflare:workers';
-import { getChatGPTUser } from '@/app/chatgpt-auth';
+import { cookies } from 'next/headers';
 import type { Member } from './constants';
+import { allowsPublicForm } from './public-cors';
 export class ApiError extends Error { constructor(public status:number,message:string){super(message);} }
 export function database(){ if(!env.DB) throw new ApiError(503,'قاعدة البيانات غير مهيأة. يرجى المحاولة لاحقاً.'); return env.DB; }
 export const now = ()=>Math.floor(Date.now()/1000);
@@ -16,7 +17,7 @@ export async function limit(key:string,max:number,seconds=600){
 }
 export function checkOrigin(request:Request){
   const origin=request.headers.get('origin');
-  if(!origin || origin!==new URL(request.url).origin) throw new ApiError(403,'تعذر التحقق من مصدر الطلب. حدّث الصفحة وحاول مجدداً.');
+  if(!origin || (origin!==new URL(request.url).origin && !(request.method==='POST' && allowsPublicForm(request,env.PUBLIC_FORM_ORIGIN)))) throw new ApiError(403,'تعذر التحقق من مصدر الطلب. حدّث الصفحة وحاول مجدداً.');
   if(!request.headers.get('content-type')?.includes('application/json')) throw new ApiError(415,'صيغة الطلب غير مدعومة.');
 }
 export async function body(request:Request){
@@ -28,20 +29,12 @@ export async function body(request:Request){
 }
 export function textField(value:unknown,max:number,min=0){if(typeof value!=='string'||value.length>max||value.trim().length<min)throw new ApiError(400,`يرجى مراجعة الحقول المطلوبة وحدود النص (${max} حرفاً).`);return value.trim();}
 export async function member():Promise<Member>{
-  const user=await getChatGPTUser();if(!user)throw new ApiError(401,'سجّل الدخول بحساب الفريق أولاً.');
-  const db=database();
-  if(env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase()===user.email.toLowerCase()){
-    await db.batch([
-      db.prepare("INSERT OR IGNORE INTO members (email,user_id,name,role,active,created_at) SELECT ?,?,?,'admin',1,? WHERE NOT EXISTS (SELECT 1 FROM settings WHERE key='admin_bootstrapped')").bind(user.email.toLowerCase(),user.userId,user.displayName,now()),
-      db.prepare("INSERT OR IGNORE INTO settings (key,value) VALUES ('admin_bootstrapped','1')")
-    ]);
-  }
-  let row=await db.prepare('SELECT * FROM members WHERE user_id=?').bind(user.userId).first<Member>();
-  if(!row){
-    await db.prepare('UPDATE members SET user_id=? WHERE email=? AND user_id IS NULL AND active=1').bind(user.userId,user.email.toLowerCase()).run();
-    row=await db.prepare('SELECT * FROM members WHERE user_id=?').bind(user.userId).first<Member>();
-  }
-  if(!row || !row.active)throw new ApiError(403,'هذا الحساب غير مخوّل للوصول. اطلب من مدير الفريق تفعيل عضويتك.');
+  const token=(await cookies()).get('__Host-vg_team')?.value;
+  if(!token || !/^[A-Za-z0-9_-]{43}$/.test(token))throw new ApiError(401,'أدخل رمز الفريق للمتابعة.');
+  const row=await database().prepare('SELECT m.email,m.user_id,m.name,m.role,m.active,m.created_at FROM team_sessions s JOIN members m ON m.email=s.member_email WHERE s.hash=? AND s.expires_at>?').bind(await digest(token),now()).first<Member>();
+  if(!row)throw new ApiError(401,'انتهت جلسة الدخول. أدخل رمزك مجدداً.');
+  if(!row.active)throw new ApiError(403,'تم إيقاف وصول هذا العضو. تواصل مع مدير الفريق.');
   return row;
 }
 export function json(data:unknown,status=200){return Response.json(data,{status,headers:{'Cache-Control':'no-store, private','X-Content-Type-Options':'nosniff','Referrer-Policy':'same-origin'}});}
+

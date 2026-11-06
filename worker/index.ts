@@ -1,9 +1,11 @@
 import handler from "vinext/server/fetch-handler";
 import { runWithConnectorBinding } from "../lib/connector-context";
 import type { ConnectorBinding } from "../lib/connector-contract.mjs";
+import { allowsPublicForm, preflight } from '../lib/public-cors';
 
 const worker = {
   async fetch(request: Request, env: Cloudflare.Env, ctx: ExecutionContext<{ CONNECTORS?: ConnectorBinding }>) {
+    if (request.method === 'OPTIONS') return preflight(request, env.PUBLIC_FORM_ORIGIN);
     let binding = ctx.props?.CONNECTORS;
     // Local preview emulates the same request-scoped capability. This branch and
     // the auxiliary service binding are absent from production builds.
@@ -32,6 +34,10 @@ const worker = {
     if(path === '/admin' || path.startsWith('/admin/') || path.startsWith('/api/')) {
       secured.headers.set('Cache-Control','no-store, private');
       secured.headers.set('Vary','Cookie, oai-authenticated-user-id');
+    }
+    if (request.method === 'POST' && allowsPublicForm(request, env.PUBLIC_FORM_ORIGIN)) {
+      secured.headers.set('Access-Control-Allow-Origin', env.PUBLIC_FORM_ORIGIN!);
+      secured.headers.append('Vary', 'Origin');
     }
     return secured;
   },

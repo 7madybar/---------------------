@@ -1,10 +1,19 @@
 import { ApiError, database, member, body, checkOrigin, textField, json, now, limit, identity, digest } from '@/lib/server';
 import { ROLES,CATEGORIES,STATUSES } from '@/lib/constants';
+import { signInWithCode,signOutCode,newAccessCode,codeHash,issueCode } from '@/lib/team-codes';
 export const dynamic='force-dynamic';
 async function handle(request:Request){try{
   const url=new URL(request.url), path=url.pathname.replace(/^\/api\//,'').split('/'), method=request.method;
   if(method!=='GET')checkOrigin(request);
   const db=database();
+  if(path.join('/')==='team/login'&&method==='POST'){
+    await limit('team-login:'+await identity(request),10);
+    const data=await body(request),code=textField(data.code,80,1);
+    const cookie=await signInWithCode(code);const response=json({ok:true});response.headers.set('Set-Cookie',cookie);return response;
+  }
+  if(path.join('/')==='team/logout'&&method==='POST'){
+    const response=json({ok:true});response.headers.set('Set-Cookie',await signOutCode());return response;
+  }
   if(path[0]==='challenge' && path.length===1 && method==='POST'){
     const ip=await identity(request);await limit('challenge:'+ip,30);
     const id=crypto.randomUUID(),time=now();
@@ -49,9 +58,10 @@ async function handle(request:Request){try{
   }
   if(path[0]==='members'){
     if(me.role!=='admin')throw new ApiError(403,'هذه العملية متاحة للمدير فقط.');
-    if(method==='GET'&&path.length===1){const result=await db.prepare('SELECT * FROM members ORDER BY created_at').all();return json({members:result.results});}
-    if(method==='POST'&&path.length===1){const data=await body(request),email=textField(data.email,254,3).toLowerCase(),name=textField(data.name,80,1);if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)||!['admin','member'].includes(data.role))throw new ApiError(400,'راجع البريد والدور.');if(await db.prepare('SELECT email FROM members WHERE email=?').bind(email).first())throw new ApiError(409,'هذا البريد مضاف بالفعل.');await db.prepare('INSERT INTO members (email,name,role,active,created_at) VALUES (?,?,?,1,?)').bind(email,name,data.role,now()).run();return json({ok:true},201);}
-    if(method==='PATCH'&&path.length===1){const data=await body(request),email=textField(data.email,254,3).toLowerCase();if(email===me.email)throw new ApiError(400,'لا يمكنك تغيير صلاحية حسابك من هذه اللوحة.');if(!['admin','member'].includes(data.role)||typeof data.active!=='boolean')throw new ApiError(400,'بيانات الصلاحية غير صالحة.');const result=await db.prepare('UPDATE members SET role=?,active=? WHERE email=?').bind(data.role,data.active?1:0,email).run();if(!result.meta.changes)throw new ApiError(404,'العضو غير موجود.');return json({ok:true});}
+    if(method==='GET'&&path.length===1){const result=await db.prepare('SELECT email,user_id,name,role,active,created_at FROM members ORDER BY created_at').all();return json({members:result.results});}
+    if(method==='POST'&&path.length===1){const data=await body(request),name=textField(data.name,80,1);if(!['admin','member'].includes(data.role))throw new ApiError(400,'اختر صلاحية صحيحة.');const email='member_'+crypto.randomUUID(),code=newAccessCode();await db.prepare('INSERT INTO members (email,user_id,name,role,active,created_at,access_code_hash) VALUES (?,?,?,?,1,?,?)').bind(email,crypto.randomUUID(),name,data.role,now(),await codeHash(code)).run();return json({ok:true,accessCode:code,memberId:email},201);}
+    if(method==='POST'&&path[1]==='rotate'&&path.length===2){const data=await body(request),email=textField(data.email,254,1);return json({ok:true,accessCode:await issueCode(email)});}
+    if(method==='PATCH'&&path.length===1){const data=await body(request),email=textField(data.email,254,1);if(email===me.email)throw new ApiError(400,'لا يمكنك تغيير صلاحية حسابك من هذه اللوحة.');if(!['admin','member'].includes(data.role)||typeof data.active!=='boolean')throw new ApiError(400,'بيانات الصلاحية غير صالحة.');const results=await db.batch([db.prepare('UPDATE members SET role=?,active=? WHERE email=?').bind(data.role,data.active?1:0,email),db.prepare('DELETE FROM team_sessions WHERE member_email=? AND ?=0').bind(email,data.active?1:0)]);if(!results[0].meta.changes)throw new ApiError(404,'العضو غير موجود.');return json({ok:true});}
   }
   throw new ApiError(404,'المسار غير موجود.');
 }catch(error){if(error instanceof ApiError)return json({error:error.message},error.status);console.error('Request failed',error instanceof Error?error.name:'Unknown');return json({error:'تعذر إتمام الطلب حالياً. يرجى المحاولة لاحقاً.'},503);}}

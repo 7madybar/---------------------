@@ -2,8 +2,13 @@ import { sqliteTable, text, integer, index } from 'drizzle-orm/sqlite-core';
 export const members = sqliteTable('members', {
   email: text('email').primaryKey(), userId: text('user_id').unique(), name: text('name').notNull(),
   role: text('role').notNull(), active: integer('active').notNull().default(1), createdAt: integer('created_at').notNull(),
+  accessCodeHash: text('access_code_hash').unique(),
 });
 export const settings = sqliteTable('settings', { key: text('key').primaryKey(), value: text('value').notNull() });
+export const teamSessions = sqliteTable('team_sessions', {
+  hash: text('hash').primaryKey(), memberEmail: text('member_email').notNull().references(()=>members.email),
+  createdAt: integer('created_at').notNull(), expiresAt: integer('expires_at').notNull(),
+}, t => [index('session_member').on(t.memberEmail), index('session_expiry').on(t.expiresAt)]);
 export const submissions = sqliteTable('submissions', {
   id: text('id').primaryKey(), role: text('role').notNull(), category: text('category').notNull(),
   message: text('message').notNull(), name: text('name'), status: text('status').notNull().default('new'),

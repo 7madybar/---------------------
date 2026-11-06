@@ -1,0 +1,3 @@
+
+# Preserve Windows batch file bytes and CRLF endings.
+*.cmd -text

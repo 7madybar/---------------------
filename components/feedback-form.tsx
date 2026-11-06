@@ -2,6 +2,7 @@
 import { useEffect,useRef,useState } from 'react';
 import { Code2,Clapperboard,Network,Users,ArrowUpLeft,Check,LoaderCircle,CheckCircle2,AlertCircle,LockKeyhole,Lightbulb,ClipboardList,Zap,MessageSquare,Ellipsis } from 'lucide-react';
 import { ROLES,CATEGORIES } from '@/lib/constants';
+import { publicApi } from '@/lib/public-site';
 const roleIcons={tech:Code2,media:Clapperboard,organization:Network,visitor:Users};
 const roleDescriptions={tech:'حلول تصنع الفرق',media:'صوت الفريق وصورته',organization:'التفاصيل تصنع النجاح',visitor:'رأيك يضيف لنا'};
 const failureMessage=(e:unknown)=>e instanceof Error && !(e instanceof TypeError) && e.name!=='AbortError'?e.message:'تعذر الاتصال. بقيت رسالتك في النموذج؛ أعد المحاولة.';
@@ -10,7 +11,7 @@ export default function FeedbackForm(){
  const [role,setRole]=useState(''),[category,setCategory]=useState(''),[message,setMessage]=useState(''),[name,setName]=useState(''),[website,setWebsite]=useState('');
  const [token,setToken]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState(''),[success,setSuccess]=useState(''),[errors,setErrors]=useState<Record<string,string>>({});
  const lock=useRef(false),errorBox=useRef<HTMLDivElement>(null),form=useRef<HTMLFormElement>(null);
- async function challenge(){const r=await fetch('/api/challenge',{method:'POST',headers:{'Content-Type':'application/json'},body:'{}'});const data=await r.json() as { token:string; error?:string };if(!r.ok)throw new Error(data.error);setToken(data.token);return data.token as string;}
+ async function challenge(){const r=await fetch(publicApi('challenge'),{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},body:'{}'});const data=await r.json() as { token:string; error?:string };if(!r.ok)throw new Error(data.error);setToken(data.token);return data.token as string;}
  useEffect(()=>{challenge().catch(e=>setError(failureMessage(e)));},[]);
  function clearField(key:string){setErrors(old=>({...old,[key]:''}));}
  async function submit(event:React.FormEvent){event.preventDefault();if(lock.current)return;
@@ -19,7 +20,7 @@ export default function FeedbackForm(){
    lock.current=true;setPending(true);setError('');
    try{let currentToken=token;if(!currentToken){currentToken=await challenge();await new Promise(resolve=>setTimeout(resolve,2100));}
      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
-     let response;try{response=await fetch('/api/submit',{method:'POST',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({role,category,message,name,website,token:currentToken})});}finally{clearTimeout(timer);}
+     let response;try{response=await fetch(publicApi('submit'),{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({role,category,message,name,website,token:currentToken})});}finally{clearTimeout(timer);}
      const result=await response.json() as { receipt?:string; error?:string };if(!response.ok){if(response.status===410)await challenge();throw new Error(result.error||'تعذر إرسال الرسالة.');}
      if(!result.receipt)throw new Error('لم يصل تأكيد الحفظ. يرجى إعادة المحاولة.');setSuccess(result.receipt);setMessage('');setName('');
    }catch(e){setError(failureMessage(e));setTimeout(()=>errorBox.current?.focus(),0);}finally{lock.current=false;setPending(false);}
@@ -39,5 +40,6 @@ export default function FeedbackForm(){
  <div className="submit-row"><p><LockKeyhole size={15}/> يطّلع على رسالتك أعضاء الفريق المخوّلون فقط.</p><button className="primary" type="submit" disabled={pending}>{pending?<><LoaderCircle className="spin" size={19}/>جارٍ الإرسال…</>:<>إرسال الرسالة <ArrowUpLeft size={19}/></>}</button></div>
  </form>;
 }
+
 
 
