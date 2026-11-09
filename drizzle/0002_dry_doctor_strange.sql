@@ -1,0 +1,1 @@
+ALTER TABLE `members` ADD `access_code_expires_at` integer;

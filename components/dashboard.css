@@ -1,0 +1,23 @@
+.admin-main .admin-tabs{flex-wrap:wrap;gap:12px 20px}
+.message-summary{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.summary-filter{display:flex;justify-content:space-between;align-items:center;gap:12px;min-height:76px;padding:14px 16px;border:1px solid var(--border);background:var(--panel);color:var(--muted);text-align:start}
+.summary-filter strong{font-size:26px;font-weight:500;line-height:1;color:var(--text)}
+.summary-filter span{font-size:13px}
+.summary-filter:hover{border-color:var(--green)}
+.summary-filter.active{border-color:var(--green);background:var(--green-dark);color:var(--green)}
+.summary-filter.active strong{color:var(--green)}
+.summary-note{font-size:12px;color:var(--muted);margin:10px 0 20px}
+.list-info{display:flex;flex-wrap:wrap;align-items:center;gap:6px 16px}
+.list-info small{font-size:11px;color:var(--muted)}
+.list-actions{display:flex;flex-wrap:wrap;gap:8px}
+.message-modal .danger-button{color:var(--error);border-color:var(--error)}
+.message-modal .message-delete-zone{border-top:1px solid var(--border);margin-top:20px;padding-top:16px}
+.delete-confirmation{border:1px solid var(--error);padding:16px;background:var(--panel);margin-top:16px}
+.delete-confirmation h3{font-size:16px;color:var(--error);margin-bottom:8px}
+.delete-confirmation p{font-size:13px;color:var(--muted);line-height:1.9}
+.delete-confirmation .admin-actions{margin-top:16px;flex-wrap:wrap}
+.message-modal .confirm-danger{background:var(--error);color:var(--bg)}
+.comment-counter{font-size:11px;color:var(--muted);text-align:end;margin-top:6px}
+.message-modal .comment-form textarea{min-height:110px}
+.admin-main .empty-state .secondary{margin-top:18px}
+@media(max-width:640px){.message-summary{grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}.summary-filter{padding:12px;min-height:68px}.summary-filter strong{font-size:23px}.summary-filter span{font-size:12px}.admin-main .list-topline{align-items:flex-start;gap:12px;flex-wrap:wrap}.list-info{flex-direction:column;align-items:flex-start;gap:4px}.list-actions{margin-inline-start:auto}.list-actions .secondary{font-size:12px;padding-inline:10px}.delete-confirmation{padding:12px}.delete-confirmation .admin-actions>*{min-width:0;flex:1}.message-modal .message-meta{gap:7px}}

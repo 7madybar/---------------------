@@ -12,6 +12,9 @@ export function configureToolEnvironment(projectRoot) {
     WRANGLER_LOG_PATH: path.join(runtimeRoot, "wrangler/logs"),
     WRANGLER_REGISTRY_PATH: path.join(runtimeRoot, "wrangler/dev-registry"),
     MINIFLARE_REGISTRY_PATH: path.join(runtimeRoot, "wrangler/registry"),
+    // Miniflare 5 uses Cloudflare's shared XDG dev registry. Preserve any
+    // caller setting, otherwise keep preview state in the writable checkout.
+    XDG_CONFIG_HOME: path.join(runtimeRoot, "config"),
   };
   for (const [name, value] of Object.entries(defaults)) {
     process.env[name] ??= value;

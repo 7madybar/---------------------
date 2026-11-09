@@ -1,4 +1,5 @@
-export const publicFormPaths = new Set(['/api/challenge', '/api/submit']);
+// Only capability-protected status metadata is public; private message APIs stay closed.
+export const publicFormPaths = new Set(['/api/challenge', '/api/submit', '/api/track']);
 export function allowsPublicForm(request: Request, configuredOrigin?: string) {
   return !!configuredOrigin && request.headers.get('origin') === configuredOrigin &&
     publicFormPaths.has(new URL(request.url).pathname);

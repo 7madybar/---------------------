@@ -3,11 +3,13 @@ import { useEffect,useRef,useState } from 'react';
 import { Code2,Clapperboard,Network,Users,ArrowUpLeft,Check,LoaderCircle,CheckCircle2,AlertCircle,LockKeyhole,Lightbulb,ClipboardList,Zap,MessageSquare,Ellipsis } from 'lucide-react';
 import { ROLES,CATEGORIES } from '@/lib/constants';
 import { publicApi } from '@/lib/public-site';
+import SubmissionTracking,{TrackingCode} from './submission-tracking';
 const roleIcons={tech:Code2,media:Clapperboard,organization:Network,visitor:Users};
 const roleDescriptions={tech:'حلول تصنع الفرق',media:'صوت الفريق وصورته',organization:'التفاصيل تصنع النجاح',visitor:'رأيك يضيف لنا'};
 const failureMessage=(e:unknown)=>e instanceof Error && !(e instanceof TypeError) && e.name!=='AbortError'?e.message:'تعذر الاتصال. بقيت رسالتك في النموذج؛ أعد المحاولة.';
 const categoryIcons={idea:Lightbulb,report:ClipboardList,urgent:Zap,note:MessageSquare,other:Ellipsis};
 export default function FeedbackForm(){
+ const [view,setView]=useState('submit'),[tracking,setTracking]=useState('');
  const [role,setRole]=useState(''),[category,setCategory]=useState(''),[message,setMessage]=useState(''),[name,setName]=useState(''),[website,setWebsite]=useState('');
  const [token,setToken]=useState(''),[pending,setPending]=useState(false),[error,setError]=useState(''),[success,setSuccess]=useState(''),[errors,setErrors]=useState<Record<string,string>>({});
  const lock=useRef(false),errorBox=useRef<HTMLDivElement>(null),form=useRef<HTMLFormElement>(null);
@@ -21,12 +23,14 @@ export default function FeedbackForm(){
    try{let currentToken=token;if(!currentToken){currentToken=await challenge();await new Promise(resolve=>setTimeout(resolve,2100));}
      const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),20000);
      let response;try{response=await fetch(publicApi('submit'),{method:'POST',credentials:'omit',headers:{'Content-Type':'application/json'},signal:controller.signal,body:JSON.stringify({role,category,message,name,website,token:currentToken})});}finally{clearTimeout(timer);}
-     const result=await response.json() as { receipt?:string; error?:string };if(!response.ok){if(response.status===410)await challenge();throw new Error(result.error||'تعذر إرسال الرسالة.');}
-     if(!result.receipt)throw new Error('لم يصل تأكيد الحفظ. يرجى إعادة المحاولة.');setSuccess(result.receipt);setMessage('');setName('');
+     const result=await response.json() as { receipt?:string; trackingToken?:string; error?:string };if(!response.ok){if(response.status===410)await challenge();throw new Error(result.error||'تعذر إرسال الرسالة.');}
+     if(!result.receipt||!result.trackingToken)throw new Error('لم يصل تأكيد الحفظ ورمز المتابعة. يرجى إعادة المحاولة.');setSuccess(result.receipt);setTracking(result.trackingToken);setMessage('');setName('');
    }catch(e){setError(failureMessage(e));setTimeout(()=>errorBox.current?.focus(),0);}finally{lock.current=false;setPending(false);}
  }
- if(success)return <section className="success-panel" aria-live="polite"><span className="success-icon"><CheckCircle2 size={38}/></span><span className="eyebrow" dir="ltr">MESSAGE RECEIVED</span><h2>وصلت رسالتك. شكراً لمشاركتك.</h2><p>حُفظت رسالتك بنجاح، وأصبحت متاحة للفريق للاطلاع والمتابعة.</p><div className="receipt">رقم الرسالة <b dir="ltr">{success.slice(0,8).toUpperCase()}</b></div><button className="primary" onClick={()=>{setSuccess('');setRole('');setCategory('');setToken('');challenge().catch(e=>setError(failureMessage(e)));}}>إرسال رسالة أخرى <ArrowUpLeft size={19}/></button></section>;
- return <form ref={form} onSubmit={submit} noValidate className="feedback-form" aria-busy={pending}>
+ const navigation=<nav className="public-mode-switch" aria-label="إرسال الرسائل ومتابعتها"><button className={view==='submit'?'active':''} disabled={pending} onClick={()=>setView('submit')}>إرسال رسالة</button><button className={view==='track'?'active':''} disabled={pending} onClick={()=>setView('track')}>متابعة رسالة</button></nav>;
+ if(view==='track')return <>{navigation}<SubmissionTracking initialToken={tracking}/></>;
+ if(success)return <>{navigation}<section className="success-panel" aria-live="polite"><span className="success-icon"><CheckCircle2 size={38}/></span><span className="eyebrow" dir="ltr">MESSAGE RECEIVED</span><h2>وصلت رسالتك. شكراً لمشاركتك.</h2><p>حُفظت رسالتك بنجاح، وأصبحت متاحة للفريق للاطلاع والمتابعة.</p><div className="receipt">رقم الرسالة <b dir="ltr">{success.slice(0,8).toUpperCase()}</b></div><TrackingCode token={tracking}/><div className="success-actions"><button className="primary" onClick={()=>setView('track')}>متابعة حالة الرسالة <ArrowUpLeft size={19}/></button><button className="secondary" onClick={()=>{setSuccess('');setRole('');setCategory('');setToken('');challenge().catch(e=>setError(failureMessage(e)));}}>إرسال رسالة أخرى</button></div></section></>;
+ return <>{navigation}<form ref={form} onSubmit={submit} noValidate className="feedback-form" aria-busy={pending}>
  <div className="form-topline"><span><span className="live-dot"/> قناة التواصل المباشر</span><span dir="ltr">VG+ / FEEDBACK</span></div>
  <fieldset disabled={pending}><legend><span className="step">01</span>من أين تشاركنا؟ <span className="required">*</span></legend><p className="field-hint">اختر الصفة الأقرب إليك.</p>
  <div className="role-grid" role="radiogroup" aria-label="صفتك" aria-required="true" aria-invalid={!!errors.role} aria-describedby={errors.role?'role-error':undefined} tabIndex={errors.role?-1:undefined}>
@@ -38,7 +42,7 @@ export default function FeedbackForm(){
  <div className="honeypot" aria-hidden="true"><label htmlFor="website">Website</label><input id="website" tabIndex={-1} autoComplete="off" value={website} onChange={e=>setWebsite(e.target.value)}/></div>
  {error&&<div ref={errorBox} role="alert" className="error-box" tabIndex={-1}><AlertCircle size={18}/><span>{error}</span></div>}
  <div className="submit-row"><p><LockKeyhole size={15}/> يطّلع على رسالتك أعضاء الفريق المخوّلون فقط.</p><button className="primary" type="submit" disabled={pending}>{pending?<><LoaderCircle className="spin" size={19}/>جارٍ الإرسال…</>:<>إرسال الرسالة <ArrowUpLeft size={19}/></>}</button></div>
- </form>;
+ </form></>;
 }
 
 

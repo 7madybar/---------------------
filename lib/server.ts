@@ -45,7 +45,8 @@ export async function member():Promise<Member>{
   const token=jar.get(EMBED_SESSION_COOKIE)?.value || jar.get(SESSION_COOKIE)?.value;
   if(!token || !/^[A-Za-z0-9_-]{43}$/.test(token))throw new ApiError(401,'أدخل رمز الفريق للمتابعة.');
   await ensureOwnerRole();
-  const row=await database().prepare('SELECT m.email,m.user_id,m.name,m.role,m.active,m.created_at FROM team_sessions s JOIN members m ON m.email=s.member_email WHERE s.hash=? AND s.expires_at>?').bind(await digest(token),now()).first<Member>();
+  const time=now();
+  const row=await database().prepare('SELECT m.email,m.user_id,m.name,m.role,m.active,m.created_at FROM team_sessions s JOIN members m ON m.email=s.member_email WHERE s.hash=? AND (s.expires_at=0 OR s.expires_at>?) AND (m.access_code_expires_at IS NULL OR m.access_code_expires_at>?)').bind(await digest(token),time,time).first<Member>();
   if(!row)throw new ApiError(401,'انتهت جلسة الدخول. أدخل رمزك مجدداً.');
   if(!row.active)throw new ApiError(403,'تم إيقاف وصول هذا العضو. تواصل مع مدير الفريق.');
   return row;

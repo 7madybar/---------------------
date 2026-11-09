@@ -18,6 +18,7 @@ const managedLinux = readExecutionProfile() === "managed-linux";
 const localBindingConfig = {
   main: "./worker/index.ts",
   compatibility_flags: ["nodejs_compat"],
+  assets: { run_worker_first: ['/', '/admin', '/admin/*', '/api/*'] },
   d1_databases: d1
     ? [
         {
@@ -44,6 +45,8 @@ export default defineConfig(async ({ command }) => {
   const { cloudflare } = await import("@cloudflare/vite-plugin");
 
   return {
+    // Root index.html belongs to GitHub Pages; Vinext owns application routes.
+    appType: 'custom' as const,
     server: {
       ...(managedLinux
         ? { host: "0.0.0.0", allowedHosts: ["terminal.local"] }

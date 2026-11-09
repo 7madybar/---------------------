@@ -8,14 +8,20 @@ if(!['localhost','127.0.0.1'].includes(new URL(origin).hostname))throw Error('Lo
 function findSqlite(dir){for(const entry of readdirSync(dir,{withFileTypes:true})){const p=join(dir,entry.name);if(entry.isDirectory()){const f=findSqlite(p);if(f)return f;}else if(p.endsWith('.sqlite'))return p;}}
 const db=new DatabaseSync(findSqlite(resolve('.wrangler/state/v3/d1')));db.exec('PRAGMA busy_timeout=5000');
 const ids=[],createdMembers=[];let checks=0,adminCookie='';
+const previousPolicy=db.prepare("SELECT value FROM settings WHERE key='team_session_hours'").get();
 async function request(path,{method='GET',data,cookie='',headers={}}={}){const r=await fetch(origin+path,{method,headers:{...(method==='GET'?{}:{'Content-Type':'application/json',Origin:origin}),...(cookie?{Cookie:cookie}:{}),...headers},body:data===undefined?undefined:JSON.stringify(data)});let result;try{result=await r.json();}catch{result=null;}return {r,data:result};}
 async function expect(path,status,options){const r=await request(path,options);assert.equal(r.r.status,status,`${path}: ${JSON.stringify(r.data)}`);checks++;return r;}
-async function login(code,embedded=false){const r=await expect('/api/team/login',200,{method:'POST',data:{code,embedded}});const cookie=r.r.headers.get('set-cookie');assert.match(cookie,/HttpOnly/);assert.match(cookie,/Secure/);assert.match(cookie,embedded?/SameSite=None/:/SameSite=Lax/);if(embedded)assert.match(cookie,/Partitioned/);assert.match(cookie,/Max-Age=28800/);return cookie.split(';')[0];}
+async function login(code,embedded=false,seconds=28800){const r=await expect('/api/team/login',200,{method:'POST',data:{code,embedded}});const cookie=r.r.headers.get('set-cookie');assert.match(cookie,/HttpOnly/);assert.match(cookie,/Secure/);assert.match(cookie,embedded?/SameSite=None/:/SameSite=Lax/);if(embedded)assert.match(cookie,/Partitioned/);assert.ok(cookie.includes('Max-Age='+seconds+';')||cookie.endsWith('Max-Age='+seconds));return cookie.split(';')[0];}
+async function sessionHash(cookie){return Buffer.from(await crypto.subtle.digest('SHA-256',new TextEncoder().encode(cookie.split('=')[1]))).toString('hex');}
 const payload=token=>({token,role:'visitor',category:'idea',message:'اختبار تكامل آلي 100% _ <script>alert(1)</script>',name:'',website:''});
 async function token(){const {data}=await expect('/api/challenge',200,{method:'POST',data:{}});ids.push(data.token);db.prepare('UPDATE challenges SET created_at=created_at-3 WHERE id=?').run(data.token);return data.token;}
 try{
  db.exec('DELETE FROM rate_limits');
- for(const path of ['/api/messages','/api/members','/api/me'])await expect(path,401);
+ db.exec("DELETE FROM settings WHERE key='team_session_hours'");
+ await expect('/api/team/session-settings',401);
+ await expect('/api/team/session-settings',401,{method:'PATCH',data:{hours:null}});
+ await expect('/api/members',401,{method:'DELETE',data:{memberId:'unknown'}});
+ for(const path of ['/api/messages','/api/messages/summary','/api/members','/api/me'])await expect(path,401);
  await expect('/api/me',401,{headers:{'oai-authenticated-user-id':'local_seedy','oai-authenticated-user-email':'seedy@sites.test'}});
  await expect('/api/me',401,{cookie:'__Host-vg_team=forged'});
  await expect('/api/team/login',401,{method:'POST',data:{code:'invalid'}});
@@ -26,8 +32,27 @@ try{
  const id=await token();
  for(const change of [{message:' '},{message:'x'.repeat(1201)},{role:'admin'},{category:'__proto__'},{website:'bot'}])await expect('/api/submit',400,{method:'POST',data:{...payload(id),...change}});
  await expect('/api/submit',413,{method:'POST',data:{...payload(id),junk:'x'.repeat(17000)}});
- const {data:saved}=await expect('/api/submit',201,{method:'POST',data:payload(id)});assert.deepEqual(saved,{receipt:id});
- await Promise.all(Array.from({length:4},()=>expect('/api/submit',200,{method:'POST',data:payload(id)})));
+ const {data:saved}=await expect('/api/submit',201,{method:'POST',data:payload(id)});
+ assert.deepEqual(Object.keys(saved).sort(),['receipt','trackingToken']);assert.equal(saved.receipt,id);
+ assert.match(saved.trackingToken,new RegExp('^'+id+'\\.[A-Za-z0-9_-]{43}$'));
+ const trackingToken=saved.trackingToken;
+ const retries=await Promise.all(Array.from({length:4},()=>expect('/api/submit',200,{method:'POST',data:payload(id)})));
+ assert.ok(retries.every(r=>r.data.trackingToken===trackingToken));
+ const originalChallengeIP=db.prepare('SELECT ip_hash FROM challenges WHERE id=?').get(id).ip_hash;
+ db.prepare('UPDATE challenges SET ip_hash=? WHERE id=?').run('other-client',id);
+ const deniedRetry=await expect('/api/submit',410,{method:'POST',data:payload(id)});assert.ok(!('trackingToken' in deniedRetry.data));
+ db.prepare('UPDATE challenges SET ip_hash=? WHERE id=?').run(originalChallengeIP,id);
+ await expect('/api/track',401);
+ for(const token of ['',id,'x'.repeat(81)])await expect('/api/track',400,{method:'POST',data:{token}});
+ const forgedToken=trackingToken.slice(0,37)+(trackingToken[37]==='A'?'B':'A')+trackingToken.slice(38);
+ await expect('/api/track',404,{method:'POST',data:{token:forgedToken}});
+ await expect('/api/track',404,{method:'POST',data:{token:crypto.randomUUID()+'.'+trackingToken.slice(37)}});
+ await expect('/api/track',403,{method:'POST',data:{token:trackingToken},headers:{Origin:'https://attacker.example'}});
+ const {data:firstTracking}=await expect('/api/track',200,{method:'POST',data:{token:trackingToken}});
+ assert.deepEqual(Object.keys(firstTracking).sort(),['created_at','history','status']);assert.equal(firstTracking.status,'new');
+ assert.equal(firstTracking.history.length,1);assert.deepEqual(firstTracking.history[0],{status:'new',changed_by:null,changed_at:firstTracking.created_at});
+ assert.ok(Number.isInteger(firstTracking.created_at));
+
  assert.equal(db.prepare('SELECT count(*) n FROM submissions WHERE id=?').get(id).n,1);
  await expect('/api/submit',409,{method:'POST',data:{...payload(id),message:'changed'}});
  await expect('/api/messages/'+id,401);
@@ -35,6 +60,14 @@ try{
  const {data:detail}=await expect('/api/messages/'+id,200,admin);assert.equal(detail.message.name,null);assert.equal(detail.message.message,payload(id).message);
  await expect('/api/messages/'+id,400,{...admin,method:'PATCH',data:{status:'bad'}});
  await expect('/api/messages/'+id,200,{...admin,method:'PATCH',data:{status:'reviewing'}});
+ const {data:reviewTracking}=await expect('/api/track',200,{method:'POST',data:{token:trackingToken}});
+ assert.equal(reviewTracking.status,'reviewing');assert.equal(reviewTracking.history.length,2);
+ assert.deepEqual(Object.keys(reviewTracking.history[1]).sort(),['changed_at','changed_by','status']);
+ assert.equal(reviewTracking.history[1].changed_by,me.member.name);assert.equal(reviewTracking.history[1].status,'reviewing');
+ assert.ok(Number.isInteger(reviewTracking.history[1].changed_at)&&reviewTracking.history[1].changed_at>=firstTracking.created_at);
+ await expect('/api/messages/'+id,200,{...admin,method:'PATCH',data:{status:'reviewing'}});
+ assert.equal((await expect('/api/track',200,{method:'POST',data:{token:trackingToken}})).data.history.length,2);
+
  const commentId=crypto.randomUUID();for(let i=0;i<2;i++)await expect('/api/messages/'+id+'/comments',201,{...admin,method:'POST',data:{id:commentId,body:'تعليق داخلي تجريبي'}});
  const {data:thread}=await expect('/api/messages/'+id,200,admin);assert.equal(thread.comments.length,1);assert.equal(thread.message.status,'reviewing');
  const {data:list}=await expect('/api/messages?role=visitor&category=idea&status=reviewing&q=100%25%20_',200,admin);assert.ok(list.messages.some(m=>m.id===id));
@@ -67,18 +100,160 @@ try{
  const {data:manager}=await expect('/api/members',201,{...admin,method:'POST',data:{name:'مدير اختبار الصلاحيات',role:'admin'}});createdMembers.push(manager.memberId);
  const managerCookie=await login(manager.accessCode),managerAuth={cookie:managerCookie};
  assert.equal((await expect('/api/me',200,managerAuth)).data.member.role,'admin');
+ assert.deepEqual((await expect('/api/team/session-settings',200,admin)).data,{hours:8});
+ const policyMemberCookie=await login(rotated.accessCode);
+ await expect('/api/messages/'+id,200,{cookie:managerCookie,method:'PATCH',data:{status:'resolved'}});
+ const {data:resolvedTracking}=await expect('/api/track',200,{method:'POST',data:{token:trackingToken}});
+ assert.equal(resolvedTracking.status,'resolved');assert.equal(resolvedTracking.history.at(-1).changed_by,'مدير اختبار الصلاحيات');
+ assert.equal(resolvedTracking.history.at(-1).status,'resolved');
+ await expect('/api/messages/'+id,200,{cookie:policyMemberCookie,method:'PATCH',data:{status:'reviewing'}});
+ const {data:memberTracking}=await expect('/api/track',200,{method:'POST',data:{token:trackingToken}});
+ assert.equal(memberTracking.history.at(-1).changed_by,'عضو اختبار الرمز');
+ assert.ok(!JSON.stringify(memberTracking).includes(payload(id).message));
+
+ // Message removal is exclusively owned by the owner; no production data is used.
+ const deleteId=await token(),deletePayload={...payload(deleteId),message:'رسالة مؤقتة لاختبار حذف المالك'};
+ const {data:deleteSaved}=await expect('/api/submit',201,{method:'POST',data:deletePayload});
+ const deleteComment=crypto.randomUUID();
+ await expect('/api/messages/'+deleteId+'/comments',201,{...admin,method:'POST',data:{id:deleteComment,body:'تعليق يحذف مع رسالته'}});
+ await expect('/api/messages/'+deleteId,401,{method:'DELETE',data:{}});
+ for(const cookie of [managerCookie,policyMemberCookie]){
+   await expect('/api/messages/'+deleteId,403,{cookie,method:'DELETE',data:{}});
+   await expect('/api/messages/'+crypto.randomUUID(),403,{cookie,method:'DELETE',data:{}});
+   assert.equal((await expect('/api/messages/summary',200,{cookie})).data.total,db.prepare('SELECT COUNT(*) n FROM submissions').get().n);
+ }
+ await expect('/api/messages/'+deleteId,403,{...admin,method:'DELETE',data:{},headers:{Origin:'https://7madybar.github.io'}});
+ await expect('/api/messages/'+deleteId,415,{...admin,method:'DELETE',data:{},headers:{'Content-Type':'text/plain'}});
+ const ownerSessionHash=await sessionHash(adminCookie),ownerSessionEnd=db.prepare('SELECT expires_at FROM team_sessions WHERE hash=?').get(ownerSessionHash).expires_at;
+ db.prepare('UPDATE team_sessions SET expires_at=? WHERE hash=?').run(Math.floor(Date.now()/1000)-1,ownerSessionHash);
+ await expect('/api/messages/'+deleteId,401,{...admin,method:'DELETE',data:{}});
+ db.prepare('UPDATE team_sessions SET expires_at=? WHERE hash=?').run(ownerSessionEnd,ownerSessionHash);
+ db.prepare("UPDATE members SET active=0 WHERE email='seedy@sites.test'").run();
+ await expect('/api/messages/'+deleteId,403,{...admin,method:'DELETE',data:{}});
+ db.prepare("UPDATE members SET active=1 WHERE email='seedy@sites.test'").run();
+ const {data:beforeDelete}=await expect('/api/messages/summary',200,admin);
+ assert.deepEqual(Object.keys(beforeDelete).sort(),['new','resolved','reviewing','total']);
+ await expect('/api/messages/'+deleteId,200,{...admin,method:'DELETE',data:{}});
+ assert.equal(db.prepare('SELECT id FROM submissions WHERE id=?').get(deleteId),undefined);
+ assert.equal(db.prepare('SELECT id FROM comments WHERE submission_id=?').get(deleteId),undefined);
+ assert.equal(db.prepare('SELECT id FROM challenges WHERE id=?').get(deleteId),undefined);
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM status_history WHERE submission_id=?').get(deleteId).n,0);
+ await expect('/api/track',404,{method:'POST',data:{token:deleteSaved.trackingToken}});
+ await expect('/api/messages/'+deleteId,404,{...admin,method:'DELETE',data:{}});
+ await expect('/api/messages/'+deleteId,404,admin);
+ await expect('/api/messages/'+deleteId,404,{...admin,method:'PATCH',data:{status:'new'}});
+ await expect('/api/messages/'+deleteId+'/comments',404,{...admin,method:'POST',data:{id:crypto.randomUUID(),body:'لن يعيد الرسالة المحذوفة'}});
+ await expect('/api/submit',410,{method:'POST',data:deletePayload});
+ const {data:afterDelete}=await expect('/api/messages/summary',200,admin);
+ assert.equal(afterDelete.total,beforeDelete.total-1);assert.equal(afterDelete.new,beforeDelete.new-1);
+ assert.ok(db.prepare('SELECT id FROM submissions WHERE id=?').get(id));
+ assert.equal(db.prepare('SELECT COUNT(*) n FROM comments WHERE submission_id=?').get(id).n,1);
+ const concurrentId=await token();await expect('/api/submit',201,{method:'POST',data:payload(concurrentId)});
+ const raced=await Promise.all([request('/api/messages/'+concurrentId,{...admin,method:'DELETE',data:{}}),request('/api/messages/'+concurrentId+'/comments',{cookie:policyMemberCookie,method:'POST',data:{id:crypto.randomUUID(),body:'تعليق متزامن مع الحذف'}})]);
+ assert.equal(raced[0].r.status,200);assert.ok([201,404].includes(raced[1].r.status));checks+=2;
+ assert.equal(db.prepare('SELECT id FROM comments WHERE submission_id=?').get(concurrentId),undefined);
+ assert.equal(db.prepare('SELECT id FROM submissions WHERE id=?').get(concurrentId),undefined);
+ for(const cookie of [managerCookie,policyMemberCookie]){
+   await expect('/api/team/session-settings',403,{cookie});
+   await expect('/api/team/session-settings',403,{cookie,method:'PATCH',data:{hours:null}});
+ }
+ for(const hours of [0,-1,1.5,8761,'24',{},[]])await expect('/api/team/session-settings',400,{...admin,method:'PATCH',data:{hours}});
+ await expect('/api/team/session-settings',400,{...admin,method:'PATCH',data:{}});
+ await expect('/api/team/session-settings',403,{...admin,method:'PATCH',data:{hours:null},headers:{Origin:'https://7madybar.github.io'}});
+ await expect('/api/team/session-settings',200,{...admin,method:'PATCH',data:{hours:2}});
+ assert.deepEqual((await expect('/api/team/session-settings',200,admin)).data,{hours:2});
+ db.exec("DELETE FROM rate_limits WHERE key LIKE 'team-login:%'");
+ const shortCookie=await login('VG-TESTA-TESTB-TESTC-TESTD',true,7200),shortHash=await sessionHash(shortCookie);
+ assert.equal(db.prepare('SELECT expires_at-created_at AS span FROM team_sessions WHERE hash=?').get(shortHash).span,7200);
+ db.prepare('UPDATE team_sessions SET expires_at=? WHERE hash=?').run(Math.floor(Date.now()/1000)-1,shortHash);
+ await expect('/api/me',401,{cookie:shortCookie});
+ await expect('/api/team/session-settings',200,{...admin,method:'PATCH',data:{hours:null}});
+ const unlimitedCookie=await login('VG-TESTA-TESTB-TESTC-TESTD',true,34560000),unlimitedHash=await sessionHash(unlimitedCookie);
+ assert.equal(db.prepare('SELECT expires_at FROM team_sessions WHERE hash=?').get(unlimitedHash).expires_at,0);
+ db.prepare('UPDATE team_sessions SET created_at=? WHERE hash=?').run(Math.floor(Date.now()/1000)-10*365*86400,unlimitedHash);
+ await expect('/api/me',200,{cookie:unlimitedCookie});
+ // Changing policy affects new logins without extending or expiring existing sessions.
+ await expect('/api/team/session-settings',200,{...admin,method:'PATCH',data:{hours:8760}});
+ const longCookie=await login('VG-TESTA-TESTB-TESTC-TESTD',false,31536000);
+ await expect('/api/me',200,{cookie:unlimitedCookie});
+ await expect('/api/team/logout',200,{cookie:longCookie,method:'POST',data:{}});
+ await expect('/api/team/logout',200,{cookie:unlimitedCookie,method:'POST',data:{embedded:true}});
+ await expect('/api/me',401,{cookie:unlimitedCookie});
+ await expect('/api/team/session-settings',200,{...admin,method:'PATCH',data:{hours:null}});
  const originalOwnerHash=db.prepare("SELECT access_code_hash FROM members WHERE email='seedy@sites.test'").get().access_code_hash;
  for(const ownerId of [me.member.user_id,me.member.email]){
+   await expect('/api/members/code-expiry',403,{...managerAuth,method:'PATCH',data:{memberId:ownerId,codeHours:1}});
    await expect('/api/members/rotate',403,{...managerAuth,method:'POST',data:{memberId:ownerId}});
    await expect('/api/members',403,{...managerAuth,method:'PATCH',data:{memberId:ownerId,role:'member',active:false}});
    await expect('/api/members',403,{...managerAuth,method:'PATCH',data:{memberId:ownerId,role:'admin',active:true}});
  }
  assert.equal(db.prepare("SELECT access_code_hash FROM members WHERE email='seedy@sites.test'").get().access_code_hash,originalOwnerHash);
+ assert.equal(db.prepare("SELECT access_code_expires_at FROM members WHERE email='seedy@sites.test'").get().access_code_expires_at,null);
+ const {data:expiring}=await expect('/api/members',201,{...managerAuth,method:'POST',data:{name:'اختبار رمز مؤقت',role:'member',codeHours:2}});createdMembers.push(expiring.memberId);
+ assert.ok(expiring.codeExpiresAt>Math.floor(Date.now()/1000)+7190&&expiring.codeExpiresAt<=Math.floor(Date.now()/1000)+7200);
+ const originalExpiryHash=db.prepare('SELECT access_code_hash FROM members WHERE user_id=?').get(expiring.memberId).access_code_hash;
+ db.exec("DELETE FROM rate_limits WHERE key LIKE 'team-login:%'");
+ const expiringLogin=await expect('/api/team/login',200,{method:'POST',data:{code:expiring.accessCode,embedded:true}});
+ const expiryCookie=expiringLogin.r.headers.get('set-cookie').split(';')[0],expirySessionHash=await sessionHash(expiryCookie);
+ assert.equal(db.prepare('SELECT expires_at FROM team_sessions WHERE hash=?').get(expirySessionHash).expires_at,expiring.codeExpiresAt);
+ const maxCodeAge=Number(expiringLogin.r.headers.get('set-cookie').match(/Max-Age=(\d+)/)[1]);assert.ok(maxCodeAge>7190&&maxCodeAge<=7200);
+ await expect('/api/members/code-expiry',403,{cookie:expiryCookie,method:'PATCH',data:{memberId:expiring.memberId,codeHours:null}});
+ for(const codeHours of [0,-1,1.5,8761,'1',{},[]])await expect('/api/members/code-expiry',400,{...managerAuth,method:'PATCH',data:{memberId:expiring.memberId,codeHours}});
+ await expect('/api/members/code-expiry',400,{...managerAuth,method:'PATCH',data:{memberId:expiring.memberId}});
+ await expect('/api/members',400,{...managerAuth,method:'POST',data:{name:'invalid duration',role:'member',codeHours:0}});
+ await expect('/api/members/rotate',400,{...managerAuth,method:'POST',data:{memberId:expiring.memberId,codeHours:0}});
+ await expect('/api/members/code-expiry',403,{...managerAuth,method:'PATCH',data:{memberId:expiring.memberId,codeHours:null},headers:{Origin:'https://7madybar.github.io'}});
+ const {data:shortened}=await expect('/api/members/code-expiry',200,{...managerAuth,method:'PATCH',data:{memberId:expiring.memberId,codeHours:1}});
+ assert.ok(shortened.codeExpiresAt<expiring.codeExpiresAt);
+ assert.equal(db.prepare('SELECT access_code_hash FROM members WHERE user_id=?').get(expiring.memberId).access_code_hash,originalExpiryHash);
+ // Even a previously unlimited/longer session is denied when its code expires.
+ db.prepare('UPDATE members SET access_code_expires_at=? WHERE user_id=?').run(Math.floor(Date.now()/1000)-1,expiring.memberId);
+ await expect('/api/me',401,{cookie:expiryCookie});
+ await expect('/api/messages/'+id,401,{cookie:expiryCookie});
+ await expect('/api/members',401,{cookie:expiryCookie});
+ await expect('/api/team/login',401,{method:'POST',data:{code:expiring.accessCode}});
+ const {data:madePermanent}=await expect('/api/members/code-expiry',200,{...managerAuth,method:'PATCH',data:{memberId:expiring.memberId,codeHours:null}});assert.equal(madePermanent.codeExpiresAt,null);
+ assert.equal(db.prepare('SELECT access_code_hash FROM members WHERE user_id=?').get(expiring.memberId).access_code_hash,originalExpiryHash);
+ const {data:expiryRoster}=await expect('/api/members',200,managerAuth);assert.equal(expiryRoster.members.find(m=>m.id===expiring.memberId).code_expires_at,null);
+ // The global policy is currently unlimited; a permanent code allows an unlimited server session.
+ const permanentCodeCookie=await login(expiring.accessCode,true,34560000);
+ assert.equal(db.prepare('SELECT expires_at FROM team_sessions WHERE hash=?').get(await sessionHash(permanentCodeCookie)).expires_at,0);
+ const {data:timedRotated}=await expect('/api/members/rotate',200,{...managerAuth,method:'POST',data:{memberId:expiring.memberId,codeHours:3}});
+ await expect('/api/me',401,{cookie:permanentCodeCookie});await expect('/api/team/login',401,{method:'POST',data:{code:expiring.accessCode}});
+ const timedLogin=await expect('/api/team/login',200,{method:'POST',data:{code:timedRotated.accessCode}}),timedCookie=timedLogin.r.headers.get('set-cookie').split(';')[0];
+ assert.equal(db.prepare('SELECT expires_at FROM team_sessions WHERE hash=?').get(await sessionHash(timedCookie)).expires_at,timedRotated.codeExpiresAt);
  await expect('/api/members',400,{...managerAuth,method:'POST',data:{name:'cannot claim owner',role:'owner'}});
  await expect('/api/members',400,{...admin,method:'POST',data:{name:'cannot add owner',role:'owner'}});
  const {data:managed}=await expect('/api/members',201,{...managerAuth,method:'POST',data:{name:'عضو أضافه المدير',role:'member'}});createdMembers.push(managed.memberId);
- await expect('/api/members/rotate',200,{...managerAuth,method:'POST',data:{memberId:managed.memberId}});
+ const permanentMemberCookie=await login(managed.accessCode,false,34560000);
+ const {data:managedRotated}=await expect('/api/members/rotate',200,{...managerAuth,method:'POST',data:{memberId:managed.memberId}});
+ await expect('/api/me',401,{cookie:permanentMemberCookie});
+ const permanentRotatedCookie=await login(managedRotated.accessCode,true,34560000);
  await expect('/api/members',200,{...managerAuth,method:'PATCH',data:{memberId:managed.memberId,role:'member',active:false}});
+ await expect('/api/me',401,{cookie:permanentRotatedCookie});
+ await expect('/api/members',403,{...managerAuth,method:'DELETE',data:{memberId:managed.memberId}});
+ await expect('/api/members',403,{cookie:policyMemberCookie,method:'DELETE',data:{memberId:managed.memberId}});
+ await expect('/api/members',403,{...admin,method:'DELETE',data:{memberId:me.member.user_id}});
+ await expect('/api/members',400,{...admin,method:'DELETE',data:{}});
+ await expect('/api/members',404,{...admin,method:'DELETE',data:{memberId:crypto.randomUUID()}});
+ await expect('/api/members',403,{...admin,method:'DELETE',data:{memberId:managed.memberId},headers:{Origin:'https://attacker.example'}});
+ db.exec("DELETE FROM rate_limits WHERE key LIKE 'team-login:%'");
+ for(const deleteRole of ['admin','member']){
+   const {data:removed}=await expect('/api/members',201,{...admin,method:'POST',data:{name:'حساب اختبار حذف '+deleteRole,role:deleteRole}});createdMembers.push(removed.memberId);
+   const removedCookie=await login(removed.accessCode,true,34560000);
+   const preservedComment=crypto.randomUUID();
+   await expect('/api/messages/'+id+'/comments',201,{cookie:removedCookie,method:'POST',data:{id:preservedComment,body:'تعليق يبقى بعد حذف حساب صاحبه'}});
+   await expect('/api/members',200,{...admin,method:'DELETE',data:{memberId:removed.memberId}});
+   assert.equal(db.prepare('SELECT user_id FROM members WHERE user_id=?').get(removed.memberId),undefined);
+   assert.equal(db.prepare('SELECT hash FROM team_sessions WHERE hash=?').get(await sessionHash(removedCookie)),undefined);
+   assert.equal(db.prepare('SELECT body FROM comments WHERE id=?').get(preservedComment).body,'تعليق يبقى بعد حذف حساب صاحبه');
+   assert.ok((await expect('/api/messages/'+id,200,admin)).data.comments.some(c=>c.id===preservedComment&&c.author_name==='حساب اختبار حذف '+deleteRole));
+   assert.ok(!(await expect('/api/members',200,admin)).data.members.some(m=>m.id===removed.memberId));
+   await expect('/api/me',401,{cookie:removedCookie});
+   await expect('/api/team/login',401,{method:'POST',data:{code:removed.accessCode}});
+   await expect('/api/members',404,{...admin,method:'DELETE',data:{memberId:removed.memberId}});
+ }
+ await expect('/api/team/session-settings',200,{...admin,method:'PATCH',data:{hours:8}});
  await expect('/api/members',200,{...admin,method:'PATCH',data:{memberId:manager.memberId,role:'member',active:false}});
  await expect('/api/me',401,managerAuth);
  assert.equal((await expect('/api/me',200,admin)).data.member.role,'owner');
@@ -89,14 +264,21 @@ try{
  db.exec("DELETE FROM rate_limits WHERE key LIKE 'submit:%'");
  const rates=await Promise.all(Array.from({length:6},()=>token()));for(let i=0;i<5;i++)await expect('/api/submit',201,{method:'POST',data:payload(rates[i])});await expect('/api/submit',429,{method:'POST',data:payload(rates[5])});
  const allowed='https://7madybar.github.io';const corsRequest=(path,origin=allowed,method='POST')=>new Request('https://server.test'+path,{method:'OPTIONS',headers:{Origin:origin,'Access-Control-Request-Method':method,'Access-Control-Request-Headers':'content-type'}});
+ assert.equal(preflight(corsRequest('/api/track'),allowed).status,204);assert.equal(preflight(corsRequest('/api/track',allowed,'GET'),allowed).status,403);assert.equal(preflight(corsRequest('/api/track','https://attacker.example'),allowed).status,403);
  assert.equal(preflight(corsRequest('/api/challenge'),allowed).status,204);assert.equal(preflight(corsRequest('/api/submit'),allowed).headers.get('Access-Control-Allow-Origin'),allowed);
- for(const path of ['/api/me','/api/members','/api/team/login','/api/messages']){assert.equal(preflight(corsRequest(path),allowed).status,403);assert.equal(allowsPublicForm(corsRequest(path),allowed),false);}
+ for(const path of ['/api/me','/api/members','/api/members/code-expiry','/api/team/login','/api/team/session-settings','/api/messages','/api/messages/summary']){assert.equal(preflight(corsRequest(path),allowed).status,403);assert.equal(allowsPublicForm(corsRequest(path),allowed),false);}
+ assert.equal(preflight(corsRequest('/api/messages/'+id,allowed,'DELETE'),allowed).status,403);
  assert.equal(preflight(corsRequest('/api/submit','https://attacker.example'),allowed).status,403);assert.equal(preflight(corsRequest('/api/submit',allowed,'GET'),allowed).status,403);
+ assert.equal(preflight(corsRequest('/api/members',allowed,'DELETE'),allowed).status,403);
+ db.exec("DELETE FROM rate_limits WHERE key LIKE 'track:%'");
+ for(let attempt=0;attempt<30;attempt++)await expect('/api/track',404,{method:'POST',data:{token:forgedToken}});
+ await expect('/api/track',429,{method:'POST',data:{token:trackingToken}});
  let loginLimited=false;for(let attempt=0;attempt<12;attempt++){const r=await request('/api/team/login',{method:'POST',data:{code:'invalid'}});checks++;assert.ok([401,429].includes(r.r.status));if(r.r.status===429){loginLimited=true;break;}}assert.ok(loginLimited,'Login attempts must be rate limited.');
- console.log(`PASS: ${checks} HTTP checks + strict CORS assertions. Code login, session cookies, per-member access, rotation, revocation, logout, submission idempotency and private data protection.`);
+ console.log(`PASS: ${checks} HTTP checks + strict CORS assertions. Code login, session cookies, per-member access, rotation, revocation, logout, submission idempotency, capability-only tracking, attributed status history and private data protection.`);
 }finally{
+ if(previousPolicy)db.prepare("INSERT INTO settings (key,value) VALUES ('team_session_hours',?) ON CONFLICT(key) DO UPDATE SET value=excluded.value").run(previousPolicy.value);else db.exec("DELETE FROM settings WHERE key='team_session_hours'");
  db.prepare("UPDATE members SET role='owner',active=1 WHERE email='seedy@sites.test'").run();
- for(const id of ids){db.prepare('DELETE FROM comments WHERE submission_id=?').run(id);db.prepare('DELETE FROM submissions WHERE id=?').run(id);db.prepare('DELETE FROM challenges WHERE id=?').run(id);}
+ for(const id of ids){db.prepare('DELETE FROM status_history WHERE submission_id=?').run(id);db.prepare('DELETE FROM comments WHERE submission_id=?').run(id);db.prepare('DELETE FROM submissions WHERE id=?').run(id);db.prepare('DELETE FROM challenges WHERE id=?').run(id);}
  for(const memberId of createdMembers){const row=db.prepare('SELECT email FROM members WHERE user_id=?').get(memberId);if(row){db.prepare('DELETE FROM team_sessions WHERE member_email=?').run(row.email);db.prepare('DELETE FROM members WHERE user_id=?').run(memberId);}}
  db.exec('DELETE FROM rate_limits');db.close();
 }

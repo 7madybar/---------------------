@@ -3,6 +3,7 @@ export const members = sqliteTable('members', {
   email: text('email').primaryKey(), userId: text('user_id').unique(), name: text('name').notNull(),
   role: text('role').notNull(), active: integer('active').notNull().default(1), createdAt: integer('created_at').notNull(),
   accessCodeHash: text('access_code_hash').unique(),
+  accessCodeExpiresAt: integer('access_code_expires_at'),
 });
 export const settings = sqliteTable('settings', { key: text('key').primaryKey(), value: text('value').notNull() });
 export const teamSessions = sqliteTable('team_sessions', {
@@ -18,6 +19,11 @@ export const comments = sqliteTable('comments', {
   id: text('id').primaryKey(), submissionId: text('submission_id').notNull().references(()=>submissions.id),
   authorId: text('author_id').notNull(), authorName: text('author_name').notNull(), body: text('body').notNull(), createdAt: integer('created_at').notNull(),
 }, t => [index('comment_submission').on(t.submissionId)]);
+export const statusHistory = sqliteTable('status_history', {
+  id: integer('id').primaryKey({autoIncrement:true}),
+  submissionId: text('submission_id').references(()=>submissions.id,{onDelete:'cascade'}),
+  status: text('status').notNull(), changedBy: text('changed_by'), changedAt: integer('changed_at').notNull(),
+}, t => [index('status_history_submission').on(t.submissionId)]);
 export const challenges = sqliteTable('challenges', {
   id: text('id').primaryKey(), ipHash: text('ip_hash').notNull(), createdAt: integer('created_at').notNull(), expiresAt: integer('expires_at').notNull(),
 }, t => [index('challenge_expiry').on(t.expiresAt)]);

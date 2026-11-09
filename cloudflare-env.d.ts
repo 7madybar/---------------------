@@ -6,6 +6,9 @@ declare namespace Cloudflare {
     PUBLIC_FORM_ORIGIN?: string;
     TEAM_CODE_PEPPER?: string;
     INITIAL_ADMIN_CODE_HASH?: string;
+    OWNER_RECOVERY_ID?: string;
+    OWNER_RECOVERY_PROOF?: string;
+    OWNER_RECOVERY_EXPIRES_AT?: string;
     BUCKET?: R2Bucket;
   }
 }
