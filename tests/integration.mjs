@@ -71,6 +71,13 @@ try{
  const commentId=crypto.randomUUID();for(let i=0;i<2;i++)await expect('/api/messages/'+id+'/comments',201,{...admin,method:'POST',data:{id:commentId,body:'تعليق داخلي تجريبي'}});
  const {data:thread}=await expect('/api/messages/'+id,200,admin);assert.equal(thread.comments.length,1);assert.equal(thread.message.status,'reviewing');
  const {data:list}=await expect('/api/messages?role=visitor&category=idea&status=reviewing&q=100%25%20_',200,admin);assert.ok(list.messages.some(m=>m.id===id));
+ await expect('/api/messages?summary=1',401);
+ const {data:combined}=await expect('/api/messages?summary=1&role=visitor&category=idea&status=reviewing&q=100%25%20_',200,admin);
+ assert.equal(combined.total,list.total);
+ assert.deepEqual(combined.messages,list.messages);
+ assert.deepEqual(combined.summary,(await expect('/api/messages/summary',200,admin)).data);
+ const {data:unfiltered}=await expect('/api/messages?summary=1',200,admin);
+ assert.equal(unfiltered.total,unfiltered.summary.total);
  const {data:newMember}=await expect('/api/members',201,{...admin,method:'POST',data:{name:'عضو اختبار الرمز',role:'member'}});createdMembers.push(newMember.memberId);assert.ok(newMember.accessCode);
  let memberCookie=await login(newMember.accessCode);
  await expect('/api/messages/'+id,200,{cookie:memberCookie});

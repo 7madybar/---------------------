@@ -29,16 +29,22 @@ export async function body(request:Request){
   try{const data=JSON.parse(new TextDecoder().decode(joined));if(!data || Array.isArray(data)||typeof data!=='object')throw Error();return data;}catch{throw new ApiError(400,'بيانات الطلب غير صالحة.');}
 }
 export function textField(value:unknown,max:number,min=0){if(typeof value!=='string'||value.length>max||value.trim().length<min)throw new ApiError(400,`يرجى مراجعة الحقول المطلوبة وحدود النص (${max} حرفاً).`);return value.trim();}
+let ownerRoleInitialized = false;
 export async function ensureOwnerRole(){
+  if(ownerRoleInitialized)return;
   const email=env.INITIAL_ADMIN_EMAIL?.trim().toLowerCase();
   if(!email)return;
   const db=database();
-  if(await db.prepare("SELECT key FROM settings WHERE key='owner_role_initialized'").first())return;
-  await db.batch([
+  if(await db.prepare("SELECT key FROM settings WHERE key='owner_role_initialized'").first()){
+    ownerRoleInitialized=true;
+    return;
+  }
+  const results=await db.batch([
     db.prepare("UPDATE members SET role='owner' WHERE email=? AND NOT EXISTS (SELECT 1 FROM settings WHERE key='owner_role_initialized')").bind(email),
     db.prepare("UPDATE members SET user_id=lower(hex(randomblob(16))) WHERE user_id IS NULL AND NOT EXISTS (SELECT 1 FROM settings WHERE key='owner_role_initialized')"),
     db.prepare("INSERT OR IGNORE INTO settings (key,value) SELECT 'owner_role_initialized','1' WHERE EXISTS (SELECT 1 FROM members WHERE email=? AND role='owner')").bind(email),
   ]);
+  ownerRoleInitialized=results[2].meta.changes>0;
 }
 export async function member():Promise<Member>{
   const jar=await cookies();

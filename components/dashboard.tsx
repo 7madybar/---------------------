@@ -20,7 +20,33 @@ export default function Dashboard({me}:{me:Member}){
  const hasFilters=!!(q||role||category||status);
  function resetFilters(){setQ('');setRole('');setCategory('');setStatus('');setPage(1);}
  useEffect(()=>{if(notice)noticeRef.current?.focus();},[notice]);
- useEffect(()=>{if(tab!=='messages')return;const controller=new AbortController();setLoading(true);setError('');const timer=setTimeout(()=>{const params=new URLSearchParams({q,role,category,status,page:String(page)});Promise.all([api<{messages:Submission[];total:number}>('messages?'+params,'GET',undefined,controller.signal),api<typeof summary>('messages/summary','GET',undefined,controller.signal)]).then(([r,counts])=>{setTotal(r.total);setSummary(counts);const maxPage=Math.max(1,Math.ceil(r.total/25));if(page>maxPage){setPage(maxPage);return;}setMessages(r.messages);setHasLoaded(true);setUpdatedAt(Date.now()/1000);}).catch(e=>{if(e.name!=='AbortError')setError(e.message);}).finally(()=>{if(!controller.signal.aborted)setLoading(false);});},250);return()=>{clearTimeout(timer);controller.abort();};},[tab,q,role,category,status,page,version]);
+ const [search,setSearch]=useState('');
+ useEffect(()=>{
+  if(!q){setSearch('');return;}
+  const timer=setTimeout(()=>setSearch(q),250);
+  return ()=>clearTimeout(timer);
+ },[q]);
+ useEffect(()=>{
+  if(tab!=='messages'||search!==q)return;
+  const controller=new AbortController();
+  setLoading(true);
+  setError('');
+  const params=new URLSearchParams({q:search,role,category,status,page:String(page),summary:'1'});
+  api<{messages:Submission[];total:number;summary:typeof summary}>('messages?'+params,'GET',undefined,controller.signal)
+   .then(result=>{
+    if(controller.signal.aborted)return;
+    setTotal(result.total);
+    if(result.summary)setSummary(result.summary);
+    const maxPage=Math.max(1,Math.ceil(result.total/25));
+    if(page>maxPage){setPage(maxPage);return;}
+    setMessages(result.messages);
+    setHasLoaded(true);
+    setUpdatedAt(Date.now()/1000);
+   })
+   .catch(error=>{if(!controller.signal.aborted)setError(error.message);})
+   .finally(()=>{if(!controller.signal.aborted)setLoading(false);});
+  return ()=>controller.abort();
+ },[tab,q,search,role,category,status,page,version]);
  useEffect(()=>{if(tab!=='messages')return;const refresh=()=>{if(document.visibilityState==='visible')setVersion(v=>v+1);};const timer=setInterval(refresh,60000);document.addEventListener('visibilitychange',refresh);return()=>{clearInterval(timer);document.removeEventListener('visibilitychange',refresh);};},[tab]);
  return <main className="admin-main"><div className="admin-title"><div><div className="eyebrow"><ShieldCheck size={14}/> مساحة خاصة للفريق</div><h1>صوت المجتمع، بين أيدينا.</h1><p>مرحباً {me.name} · {TEAM_ROLES[me.role]}</p></div><div className="admin-actions"><a href={canonicalHomeUrl} target="_top" className="secondary">صندوق التواصل <ArrowUpLeft size={15}/></a><Logout/></div></div>
  <nav className="admin-tabs" aria-label="أقسام لوحة الفريق"><button className={tab==='messages'?'active':''} onClick={()=>setTab('messages')}>الرسائل الواردة</button><button className={tab==='members'?'active':''} onClick={()=>setTab('members')}>{managesTeam(me.role)?'إدارة الفريق':'الفريق'}</button>{me.role==='owner'&&<button className={tab==='settings'?'active':''} onClick={()=>setTab('settings')}>إعدادات الدخول</button>}</nav>

@@ -9,6 +9,7 @@ import { validCodeHours } from '@/lib/code-validity';
 import { trackingToken,trackingId,statusHistory } from '@/lib/submission-tracking';
 function codeExpiry(value:unknown){if(!validCodeHours(value))throw new ApiError(400,'حدد صلاحية الرمز من 1 إلى 8760 ساعة، أو اختر رمزاً دائماً.');return value===null?null:now()+value*3600;}
 export const dynamic='force-dynamic';
+const summaryQuery = "SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN status='new' THEN 1 ELSE 0 END),0) AS 'new',COALESCE(SUM(CASE WHEN status='reviewing' THEN 1 ELSE 0 END),0) AS reviewing,COALESCE(SUM(CASE WHEN status='resolved' THEN 1 ELSE 0 END),0) AS resolved FROM submissions";
 async function handle(request:Request){try{
   const url=new URL(request.url), path=url.pathname.replace(/^\/api\//,'').split('/'), method=request.method;
   if(method!=='GET')checkOrigin(request);
@@ -71,7 +72,7 @@ async function handle(request:Request){try{
   }
   if(path[0]==='me'&&path.length===1&&method==='GET')return json({member:me});
   if(path.join('/')==='messages/summary'&&method==='GET'){
-    const summary=await db.prepare("SELECT COUNT(*) AS total,COALESCE(SUM(CASE WHEN status='new' THEN 1 ELSE 0 END),0) AS 'new',COALESCE(SUM(CASE WHEN status='reviewing' THEN 1 ELSE 0 END),0) AS reviewing,COALESCE(SUM(CASE WHEN status='resolved' THEN 1 ELSE 0 END),0) AS resolved FROM submissions").first();
+    const summary=await db.prepare(summaryQuery).first();
     return json(summary);
   }
   if(path[0]==='messages'&&path.length===1&&method==='GET'){
@@ -80,9 +81,15 @@ async function handle(request:Request){try{
     const search=(url.searchParams.get('q')||'').slice(0,120);if(search){conditions.push("(message LIKE ? ESCAPE '\\' OR name LIKE ? ESCAPE '\\')");const escaped=search.replace(/[\\%_]/g,'\\$&');args.push('%'+escaped+'%','%'+escaped+'%');}
     const rawPage=Number(url.searchParams.get('page')||1);const page=Number.isFinite(rawPage)?Math.max(1,Math.floor(rawPage)):1;
     const where=conditions.length?' WHERE '+conditions.join(' AND '):'';
-    const count=await db.prepare('SELECT COUNT(*) AS total FROM submissions'+where).bind(...args).first();
-    const result=await db.prepare('SELECT id,role,category,message,name,status,created_at FROM submissions'+where+' ORDER BY created_at DESC,id LIMIT 25 OFFSET ?').bind(...args,(page-1)*25).all();
-    return json({messages:result.results,total:count?.total??0,page});
+    const includeSummary = url.searchParams.get('summary') === '1';
+    const needsCount = !includeSummary || conditions.length > 0;
+    const statements = [db.prepare('SELECT id,role,category,message,name,status,created_at FROM submissions'+where+' ORDER BY created_at DESC,id LIMIT 25 OFFSET ?').bind(...args,(page-1)*25)];
+    if(needsCount) statements.push(db.prepare('SELECT COUNT(*) AS total FROM submissions'+where).bind(...args));
+    if(includeSummary) statements.push(db.prepare(summaryQuery));
+    const [messages,countOrSummary,filteredSummary] = await db.batch(statements);
+    const summary = includeSummary ? (filteredSummary ?? countOrSummary).results[0] : undefined;
+    const count = countOrSummary.results[0] as {total:number} | undefined;
+    return json({messages:messages.results,total:count?.total??0,page,summary});
   }
   if(path[0]==='messages'&&path[1]){
     if(method==='DELETE'&&path.length===2&&me.role!=='owner')throw new ApiError(403,'حذف الرسائل متاح للمالك فقط.');
